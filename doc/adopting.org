@@ -1,0 +1,64 @@
+#+TITLE: Adopting kal-iroh-shell in an app (and leaving it)
+
+The steps an app takes to get its interface from its server, and the
+same steps undone.  vigil-ui is the reference consumer.
+
+* What the app keeps
+
+- Its local HTTP server (the WebView loads from it) and its transport
+  to the server (e.g. an Iroh tunnel's local port).
+- Its built-in copy of the interface: it stays the fallback.
+- What only it knows: what to save before a reload, and which user
+  activities postpone one.
+
+* Adopt
+
+** 1. Build: publish releases
+
+- Depend on =@0k/kal-iroh-shell= (=npm run vendor -- <frontend-dir>= in
+  this repository, then =npm install= in the app).
+- Add =kalIrohShellRelease({ publishDir })= to the Vite plugins.  It
+  sets =base: './'= (a release must work under any prefix) and writes
+  =ui-manifest.json= into every build; with =publishDir= it publishes.
+- Read =publishDir= from an untracked local setting (an env file), so
+  only the machine that serves releases publishes them.
+
+** 2. Page: answer the shell
+
+- =installShellReload()= before mounting, =restoreViewState()= after.
+- =useShellReloadSave(fn)= wherever state is written lazily (debounced
+  drafts, scroll positions, open forms).
+- =useShellBusy(reason, () => active)= wherever a reload would cut the
+  user off (recording, upload, a request being sent).
+
+** 3. App: plug the shell into the local server
+
+- Depend on the =kal-iroh-shell= crate (git, pinned revision; feature
+  =tauri= for a Tauri app).
+- Implement =Host=: upstream URL receiver, HTTP client, credentials,
+  admission verdict, and the user's on/off setting.
+- Build =RemoteUi::new(RemoteUiConfig { releases_base, admission_grace },
+  host, Some(shell_tx))=; merge =routes()= into the router; call
+  =spawn()= once the runtime runs.
+- In the page fallback handler: =index(EmbeddedIndex { html, build_id })=
+  (=build_id= from the embedded =ui-manifest.json=), then add
+  =ServedUi::root_attributes()= to the root element.
+- Execute =ShellCommand=s on the view: =Eval(js)= runs a script in the
+  page, =Reload= reloads it natively (Tauri:
+  =tauri::run_shell_commands(app, "main", rx)=).
+
+** 4. Server
+
+- Run =kal-iroh-shell-releases --dir <publishDir>= and expose it to the
+  devices at =releases_base= (e.g. a vigil-watch proxy serve mount).
+
+* Leave
+
+Undo in reverse; nothing else depends on it:
+
+1. Stop exposing the release server (remove the mount).
+2. Turn the app's setting off, or remove the =RemoteUi= wiring: the
+   page fallback serves the built-in copy again, without the
+   =data-ui-*= attributes.
+3. Remove the page-kit calls and the Vite plugin.  Keep =base: './'= if
+   other tooling relies on relative URLs.

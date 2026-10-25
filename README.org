@@ -1,0 +1,100 @@
+#+TITLE: kal-iroh-shell
+
+Thin app shells whose interface lives on the server: the app on each
+device shows the interface its server publishes, and reloads it — what
+the user was doing saved — the moment a new version is published.
+
+* What it is
+
+An app built with it (a Tauri or GTK program with a WebView) does not
+need a new package to change its interface.  The interface is a Vite
+build published on the server; every device follows a control stream
+and reloads into the new version, without a button and without polling.
+
+Three parts, one repository:
+
+| Part                       | Runs where                         | What it does                                                                                       |
+|----------------------------+------------------------------------+----------------------------------------------------------------------------------------------------|
+| =kal-iroh-shell=           | inside the app, on each device     | serves the page from the current release (built-in copy as fallback), follows the control stream, runs the reload handshake |
+| =kal-iroh-shell-server=    | on the server                      | serves the publish directory and a =kal-sse= control stream announcing each release and the files that changed |
+| =@0k/kal-iroh-shell= (npm) | in the page and in the Vite build  | page side of the handshake (save, busy, restore focus) and the Vite plugin that publishes releases |
+
+=kal-iroh-shell-protocol= holds the wire formats all three share.
+
+* How an update flows
+
+1. =vite build= (with the plugin) copies the build into the publish
+   directory as a frozen =<build-id>/= release and switches
+   =current.json= to it, by renames.
+2. =kal-iroh-shell-releases= notices the switch and appends an event
+   ={build_id, previous, changed, removed}= to its control stream.
+3. A reverse proxy (for example a vigil-watch serve mount reached over
+   Iroh) carries the stream to the devices.
+4. The shell sees a release the page does not run and asks the page to
+   prepare: =window.__kalIrohShell.prepareReload(n)=.
+5. The page saves what is not saved yet and answers =ready=, or =busy=
+   with a reason while the user is recording, uploading or sending; it
+   renews =busy= and turns =ready= as soon as it can.
+6. The shell reloads the view natively.  A page that does not answer
+   within 5 s, or stops renewing =busy= for 30 s, is reloaded anyway.
+
+* Usage
+
+** Server
+
+#+begin_src sh
+kal-iroh-shell-releases --dir ~/.local/share/my-app-releases -v
+#+end_src
+
+It listens on =127.0.0.1:4310= by default (=--listen=) and must be
+reachable by the devices below a path prefix, for example through a
+reverse proxy at =/serve/my-app/=.
+
+** Build
+
+#+begin_src ts
+// vite.config.ts
+import { kalIrohShellRelease } from '@0k/kal-iroh-shell/vite';
+
+export default defineConfig({
+  plugins: [vue(), kalIrohShellRelease({ publishDir: process.env.MY_APP_PUBLISH_DIR })],
+});
+#+end_src
+
+Without =publishDir= the build only gets its =ui-manifest.json= (to be
+embedded in the app as the fallback copy).
+
+** Page
+
+#+begin_src ts
+import { installShellReload, restoreViewState, useShellBusy, useShellReloadSave } from '@0k/kal-iroh-shell';
+
+installShellReload();               // before mounting
+app.mount('#app');
+restoreViewState();                 // refocus the field the user was in
+
+// in components / composables:
+useShellReloadSave(() => flushDraft());
+useShellBusy('microphone on', () => recording.value);
+#+end_src
+
+** App (Rust)
+
+The app implements =Host= (where its server is, credentials, admission,
+the user's setting), builds a =RemoteUi=, merges =RemoteUi::routes()=
+into its local server, serves its page through =RemoteUi::index()=
+(adding =ServedUi::root_attributes()= to the root element), calls
+=RemoteUi::spawn()=, and executes =ShellCommand=s on its view (feature
+=tauri=: =tauri::run_shell_commands=).
+
+See [[file:doc/adopting.org][doc/adopting.org]] for the complete steps, both ways.
+
+* Delivery
+
+Rust crates: git dependency on this repository, pinned to a revision.
+npm package: not on npmjs; =npm run vendor -- <consumer-dir>= copies a
+tarball into the consumer's =vendor/=.
+
+* License
+
+MIT

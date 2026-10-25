@@ -1,0 +1,54 @@
+{
+  "name": "@0k/kal-iroh-shell",
+  "version": "0.1.0",
+  "description": "Page kit of kal-iroh-shell: the page side of the reload handshake, and the Vite plugin that publishes interface releases.",
+  "license": "MIT",
+  "author": "Valentin Lab <valentin.lab@kalysto.org>",
+  "type": "module",
+  "private": true,
+  "//private": [
+    "Not published to npmjs: delivered to consumers as a tarball committed",
+    "under their `vendor/` directory (`npm run vendor`)."
+  ],
+  "exports": {
+    ".": "./src/index.ts",
+    "./vite": {
+      "types": "./src/vite.d.mts",
+      "default": "./src/vite.mjs"
+    }
+  },
+  "//exports": [
+    "`.` is source-only TypeScript, compiled by the consumer's Vite pipeline.",
+    "`./vite` is plain JavaScript because it is loaded by Node from the",
+    "consumer's `vite.config.ts`, and Node does not strip types inside",
+    "`node_modules`."
+  ],
+  "files": [
+    "src",
+    "README.org",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm run test",
+    "vendor": "node bin/vendor.mjs"
+  },
+  "peerDependencies": {
+    "vite": ">=5",
+    "vue": ">=3.3"
+  },
+  "peerDependenciesMeta": {
+    "vite": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "jsdom": "^25.0.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0",
+    "vitest": "^3.0.0",
+    "vue": "^3.5.0"
+  }
+}

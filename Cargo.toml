@@ -1,0 +1,33 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/kal-iroh-shell-protocol",
+    "crates/kal-iroh-shell-server",
+    "crates/kal-iroh-shell",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Valentin Lab <valentin.lab@kalysto.org>"]
+repository = "https://github.com/0k/kal-iroh-shell"
+
+[workspace.dependencies]
+kal-iroh-shell-protocol = { version = "0.1.0", path = "crates/kal-iroh-shell-protocol" }
+kal-iroh-shell-server = { version = "0.1.0", path = "crates/kal-iroh-shell-server" }
+axum = "0.8"
+futures = "0.3"
+kal-log = "0.1.1"
+kal-sse = { version = "0.2", features = ["axum"] }
+log = "0.4"
+mime_guess = "2"
+notify = "8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+http-body-util = "0.1"
+sha2 = "0.10"
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }

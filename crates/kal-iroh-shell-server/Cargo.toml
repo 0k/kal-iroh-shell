@@ -1,0 +1,31 @@
+[package]
+name = "kal-iroh-shell-server"
+description = "Serves an app's published interface releases and pushes a kal-sse control stream announcing each new one"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "kal-iroh-shell-releases"
+path = "src/bin/kal-iroh-shell-releases.rs"
+
+[dependencies]
+kal-iroh-shell-protocol.workspace = true
+axum.workspace = true
+clap = { version = "4", features = ["derive", "env"] }
+kal-log.workspace = true
+kal-sse.workspace = true
+log.workspace = true
+mime_guess.workspace = true
+notify.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+http-body-util.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+tower.workspace = true
