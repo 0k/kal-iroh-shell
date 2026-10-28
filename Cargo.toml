@@ -19,7 +19,7 @@ kal-iroh-shell-server = { version = "0.1.0", path = "crates/kal-iroh-shell-serve
 axum = "0.8"
 futures = "0.3"
 kal-log = "0.1.1"
-kal-sse = { version = "0.2", features = ["axum"] }
+kal-sse = { version = "0.3.0", features = ["axum"] }
 log = "0.4"
 mime_guess = "2"
 notify = "8"

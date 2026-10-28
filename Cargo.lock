@@ -2014,9 +2014,9 @@ dependencies = [
 
 [[package]]
 name = "kal-sse"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8724ad4522e01a0e67a9aa28c2560500cf0708b155738899461d0926765a9db"
+checksum = "0c0edf872e3cec6519fdd91839b5492a0976201d54fb8269495ecba776beea05"
 dependencies = [
  "async-stream",
  "axum",
