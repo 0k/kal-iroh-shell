@@ -10,6 +10,9 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use kal_iroh_shell_server::{REFRESH_FALLBACK, ReleaseServer, Store};
 
+/// Longest wait for in-flight requests after Ctrl-C.
+const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Manage and serve an app's interface releases.
 ///
 /// Examples:
@@ -143,12 +146,20 @@ fn serve(store: Store, listen: SocketAddr) -> Result<(), String> {
             .await
             .map_err(|e| format!("listen {listen}: {e}"))?;
         log::info!("serving {} on http://{listen}", dir.display());
-        axum::serve(listener, server.router())
-            .with_graceful_shutdown(async {
+        // Devices keep their control streams open forever, so a graceful
+        // shutdown would never finish: stop serving on Ctrl-C and give
+        // in-flight requests a short grace period, then exit.
+        let serving = axum::serve(listener, server.router()).with_graceful_shutdown(async {
+            let _ = tokio::signal::ctrl_c().await;
+            log::info!("shutting down");
+        });
+        tokio::select! {
+            res = serving => res.map_err(|e| e.to_string()),
+            _ = async {
                 let _ = tokio::signal::ctrl_c().await;
-            })
-            .await
-            .map_err(|e| e.to_string())
+                tokio::time::sleep(SHUTDOWN_GRACE).await;
+            } => Ok(()),
+        }
     })
 }
 

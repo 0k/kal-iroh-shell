@@ -63,7 +63,7 @@ kal-iroh-shell-releases --store $S promote 20261030T085038-b066f8 beta   # by bu
 kal-iroh-shell-releases --store $S promote stable~1 stable  # undo the last stable move
 kal-iroh-shell-releases --store $S channels                 # where each channel points
 kal-iroh-shell-releases --store $S log beta                 # history of a channel
-kal-iroh-shell-releases --store $S serve -v
+kal-iroh-shell-releases --store $S -v serve
 #+end_src
 
 =serve= listens on =127.0.0.1:4310= by default (=--listen=) and must be
