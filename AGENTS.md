@@ -13,15 +13,18 @@ hot-reloaded, state saved, on every device.  See `README.org`.
 - `crates/kal-iroh-shell/` — client shell, embedded in an app's local
   server through the `Host` trait.  Must compile for Android (no
   `notify`, no desktop-only crates in its non-dev dependencies).
-- `js/` — npm `@0k/kal-iroh-shell`: page kit (`src/*.ts`, source-only,
-  compiled by the consumer) and Vite plugin (`src/vite.mjs`, plain JS
-  because Node loads it from `node_modules`).
+
+The page kit and Vite plugin (npm `@0k/kal-iroh-shell`) live in their
+own repository, https://github.com/0k/kal-iroh-shell-js.
 
 ## Rules
 
 - **A wire name exists once per language.**  Rust: the protocol crate.
-  TypeScript: `js/src/protocol.ts`.  `js/test/protocol.test.ts` fails
-  when they disagree; never silence it by editing only one side.
+  TypeScript: `src/protocol.ts` of kal-iroh-shell-js, whose test
+  compares it with a copy of this crate's `src/lib.rs`.  A change of a
+  wire name here is complete only once that copy is refreshed
+  (`npm run sync-protocol -- <this-checkout>` there), the TypeScript side
+  fixed, and the package released.
 - **Every SSE endpoint goes through `kal-sse`** (REST snapshot with
   `x-sub-id` + `x-snapshot-index`, stream with `?sub=`).  Never a raw
   `Sse::new` over a broadcast channel: it loses events on reconnect.
@@ -44,4 +47,3 @@ hot-reloaded, state saved, on every device.  See `README.org`.
 
 - `cargo fmt && cargo clippy --all-targets && cargo test`
 - `cargo check -p kal-iroh-shell --features tauri`
-- `cd js && npm run check`

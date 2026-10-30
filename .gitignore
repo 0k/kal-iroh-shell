@@ -1,6 +1,4 @@
 /target
-/js/node_modules
-/js/*.tgz
 /.cargo
 AGENTS.local.md
 CLAUDE.local.md

@@ -11,13 +11,13 @@ need a new package to change its interface.  The interface is a Vite
 build published on the server; every device follows a control stream
 and reloads into the new version, without a button and without polling.
 
-Three parts, one repository:
+Three parts:
 
 | Part                       | Runs where                         | What it does                                                                                       |
 |----------------------------+------------------------------------+----------------------------------------------------------------------------------------------------|
 | =kal-iroh-shell=           | inside the app, on each device     | serves the page from the current release (built-in copy as fallback), follows the control stream, runs the reload handshake |
 | =kal-iroh-shell-server=    | on the server                      | serves the publish directory and a =kal-sse= control stream announcing each release and the files that changed |
-| =@0k/kal-iroh-shell= (npm) | in the page and in the Vite build  | page side of the handshake (save, busy, restore focus) and the Vite plugin that publishes releases |
+| =@0k/kal-iroh-shell= (npm) | in the page and in the Vite build  | page side of the handshake (save, busy, restore focus) and the Vite plugin that publishes releases; its own repository, [[https://github.com/0k/kal-iroh-shell-js][kal-iroh-shell-js]] |
 
 =kal-iroh-shell-protocol= holds the wire formats all three share.
 
@@ -92,8 +92,8 @@ See [[file:doc/adopting.org][doc/adopting.org]] for the complete steps, both way
 * Delivery
 
 Rust crates: git dependency on this repository, pinned to a revision.
-npm package: not on npmjs; =npm run vendor -- <consumer-dir>= copies a
-tarball into the consumer's =vendor/=.
+npm package: =npm install @0k/kal-iroh-shell= (published from
+[[https://github.com/0k/kal-iroh-shell-js][kal-iroh-shell-js]]).
 
 * License
 

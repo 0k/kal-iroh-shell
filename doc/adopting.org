@@ -15,8 +15,8 @@ same steps undone.  vigil-ui is the reference consumer.
 
 ** 1. Build: publish releases
 
-- Depend on =@0k/kal-iroh-shell= (=npm run vendor -- <frontend-dir>= in
-  this repository, then =npm install= in the app).
+- Depend on =@0k/kal-iroh-shell= (=npm install @0k/kal-iroh-shell=, an
+  exact published version).
 - Add =kalIrohShellRelease({ publishDir })= to the Vite plugins.  It
   sets =base: './'= (a release must work under any prefix) and writes
   =ui-manifest.json= into every build; with =publishDir= it publishes.
