@@ -17,11 +17,12 @@ same steps undone.  vigil-ui is the reference consumer.
 
 - Depend on =@0k/kal-iroh-shell= (=npm install @0k/kal-iroh-shell=, an
   exact published version).
-- Add =kalIrohShellRelease({ publishDir })= to the Vite plugins.  It
-  sets =base: './'= (a release must work under any prefix) and writes
-  =ui-manifest.json= into every build; with =publishDir= it publishes.
-- Read =publishDir= from an untracked local setting (an env file), so
-  only the machine that serves releases publishes them.
+- Add =kalIrohShellRelease()= to the Vite plugins.  It sets
+  =base: './'= (a release must work under any prefix) and writes
+  =ui-manifest.json= into every build.  Building never publishes.
+- Publish explicitly: =kal-iroh-shell-releases --store <store> publish
+  --channel dev dist= (wrap it in an app script, with the store path
+  from an untracked local setting).
 
 ** 2. Page: answer the shell
 
@@ -49,8 +50,12 @@ same steps undone.  vigil-ui is the reference consumer.
 
 ** 4. Server
 
-- Run =kal-iroh-shell-releases --dir <publishDir>= and expose it to the
-  devices at =releases_base= (e.g. a vigil-watch proxy serve mount).
+- Run =kal-iroh-shell-releases --store <store> serve= and expose it to
+  the devices at =releases_base= (e.g. a vigil-watch proxy serve mount).
+- Each device follows one channel: =Host::channel()= returns it (a
+  device setting; default =stable= for a new device).  Call
+  =RemoteUi::recheck()= when the user changes the channel or turns the
+  remote interface on.
 
 * Leave
 

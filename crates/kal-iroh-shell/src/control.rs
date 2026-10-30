@@ -87,8 +87,15 @@ async fn follow_once(ui: &RemoteUi, base: &str, sub: &mut Option<String>) -> Res
     let last_id = header(SNAPSHOT_INDEX_HEADER).unwrap_or_else(|| "0".into());
     *sub = Some(sub_id.clone());
     let snapshot: ControlSnapshot = resp.json().await.map_err(|e| format!("snapshot: {e}"))?;
-    if let Some(current) = snapshot.current {
-        ui.consider_release(&current.build_id);
+    if let Ok(mut known) = ui.known_channels.lock() {
+        *known = snapshot
+            .channels
+            .iter()
+            .map(|h| h.channel.clone())
+            .collect();
+    }
+    for head in &snapshot.channels {
+        ui.consider_release(&head.channel, &head.commit);
     }
 
     let resp = get(ui, base, CONTROL_STREAM_PATH)
@@ -117,11 +124,18 @@ async fn follow_once(ui: &RemoteUi, base: &str, sub: &mut Option<String>) -> Res
             match serde_json::from_str::<ReleaseEvent>(&event.data) {
                 Ok(release) => {
                     log::info!(
-                        "kal-iroh-shell: release {} published ({} files changed)",
+                        "kal-iroh-shell: channel {} → release {} ({} files changed)",
+                        release.channel,
                         release.build_id,
                         release.changed.len()
                     );
-                    ui.consider_release(&release.build_id);
+                    if let Ok(mut known) = ui.known_channels.lock()
+                        && !known.contains(&release.channel)
+                    {
+                        known.push(release.channel.clone());
+                        known.sort();
+                    }
+                    ui.consider_release(&release.channel, &release.commit);
                 }
                 Err(e) => log::warn!("kal-iroh-shell: bad control event: {e}"),
             }

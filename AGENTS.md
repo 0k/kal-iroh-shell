@@ -31,9 +31,14 @@ own repository, https://github.com/0k/kal-iroh-shell-js.
 - **The control stream is only "which release is current"**, separate
   from any data stream of the app.  The server only relays a publish
   (pointer switch); it never decides to update a device.
-- **A release directory is immutable once published**; publishing
-  completes the copy under a temporary name, renames it, then switches
-  the pointer by a rename.
+- **Releases live in a git release store; channels are branches.**  A
+  release (commit) is never rewritten.  The set of channels is open (no
+  hard-coded list); any channel may be moved to any release, forwards or
+  backwards, by an atomic ref update that stays in the reflog.  A
+  channel named `dev` is local: it must never be pushed to a shared
+  remote.
+- **Building never publishes.**  Publishing is the explicit `publish`
+  command; the Vite plugin only writes the manifest.
 - **The page always keeps the shell's local origin.**  The shell must
   never hand the page an upstream (tunnel) URL: that port changes on
   every reconnect.

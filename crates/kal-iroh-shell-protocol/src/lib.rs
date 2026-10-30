@@ -14,18 +14,49 @@
 
 use serde::{Deserialize, Serialize};
 
-// ---- Publish directory (written by the Vite plugin) -----------------
+// ---- Releases ---------------------------------------------------------
 
-/// File, at the root of a publish directory, naming the current release.
+/// Legacy publish-directory pointer file (before the git release store).
+/// Kept so the page kit's copy of these names stays in step.
 pub const POINTER_FILE: &str = "current.json";
-/// File, inside each release directory, listing its files.
+/// File, at the root of every release, listing its files (written by the
+/// page kit's Vite plugin).
 pub const MANIFEST_FILE: &str = "ui-manifest.json";
 
-/// `current.json`: which release is current.
+/// Where one channel points.
+///
+/// Releases live in a git repository (the release store): a release is a
+/// commit of a built interface, a channel is a branch.  `commit` is the
+/// release's full commit id; it is also the path segment its files are
+/// served under.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Pointer {
+pub struct ChannelHead {
+    pub channel: String,
+    pub commit: String,
     pub build_id: String,
     pub published_at: String,
+}
+
+/// Channel names are git branch names restricted to one safe segment:
+/// lowercase letters, digits, `.`, `_`, `-`, starting with a letter or
+/// digit (`dev`, `alpha`, `beta`, `stable`, `rc`, …).
+pub fn valid_channel(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    matches!(bytes.next(), Some(b) if b.is_ascii_lowercase() || b.is_ascii_digit())
+        && name.len() <= 64
+        && !name.ends_with(".lock")
+        && !name.contains("..")
+        && bytes.all(|b| {
+            b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-')
+        })
+}
+
+/// A full commit id: 40 lowercase hex digits.
+pub fn valid_commit(id: &str) -> bool {
+    id.len() == 40
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// One file of a release.
@@ -59,7 +90,9 @@ pub fn valid_release_path(path: &str) -> bool {
 
 // ---- Release server (below the app's releases base URL) -------------
 
-/// REST snapshot of the control channel: `{"current": Pointer | null}`.
+/// Where one channel points: `GET /channels/<channel>` → [`ChannelHead`].
+pub const CHANNELS_PREFIX: &str = "/channels";
+/// REST snapshot of the control channel: [`ControlSnapshot`].
 pub const CONTROL_SNAPSHOT_PATH: &str = "/api/control";
 /// SSE stream of the control channel (`?sub=<id>&last_event_id=<n>`).
 pub const CONTROL_STREAM_PATH: &str = "/sse/control";
@@ -68,18 +101,21 @@ pub const SUB_ID_HEADER: &str = "x-sub-id";
 /// Response header of the snapshot carrying its cursor (`kal-sse`).
 pub const SNAPSHOT_INDEX_HEADER: &str = "x-snapshot-index";
 
-/// Body of [`CONTROL_SNAPSHOT_PATH`].
+/// Body of [`CONTROL_SNAPSHOT_PATH`]: where every channel points.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControlSnapshot {
-    pub current: Option<Pointer>,
+    pub channels: Vec<ChannelHead>,
 }
 
-/// One control event: a release became current.
+/// One control event: a channel moved to another release (a publish, a
+/// promotion, or a rollback).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReleaseEvent {
+    pub channel: String,
+    pub commit: String,
     pub build_id: String,
     pub published_at: String,
-    /// The release that was current before, when known.
+    /// The commit the channel pointed to before; `None` for a new channel.
     pub previous: Option<String>,
     /// Paths added or changed since `previous` (all paths when unknown).
     pub changed: Vec<String>,
@@ -97,7 +133,7 @@ pub const STATUS_PATH: &str = "/__shell/status";
 pub const RELOAD_ACK_PATH: &str = "/__shell/reload-ack";
 /// `GET` / `POST`: boot timing marks.
 pub const BOOT_MARK_PATH: &str = "/__shell/boot-mark";
-/// Release files are served at `/__shell/ui/<build-id>/<path>`.
+/// Release files are served at `/__shell/ui/<commit>/<path>`.
 pub const RELEASE_FILES_PREFIX: &str = "/__shell/ui";
 
 /// Attribute set on the page's root element: `remote` or `embedded`.
@@ -161,5 +197,17 @@ mod tests {
         assert!(valid_release_path("assets/main.js"));
         assert!(valid_build_id("20261025T061020-62e172"));
         assert!(!valid_build_id("../x"));
+    }
+
+    #[test]
+    fn channel_names_are_single_safe_branch_names() {
+        for good in ["dev", "alpha", "beta", "stable", "rc", "rc-2", "v1.2"] {
+            assert!(valid_channel(good), "{good}");
+        }
+        for bad in ["", "Dev", "-x", "a/b", "a..b", "x.lock", "a b", "../x"] {
+            assert!(!valid_channel(bad), "{bad:?}");
+        }
+        assert!(valid_commit("47675ee0819e4c942e9861dc7b32b832e877b47d"));
+        assert!(!valid_commit("47675ee"));
     }
 }

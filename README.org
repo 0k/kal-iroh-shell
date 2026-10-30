@@ -21,17 +21,30 @@ Three parts:
 
 =kal-iroh-shell-protocol= holds the wire formats all three share.
 
+* Releases and channels
+
+Releases live in a *release store*, a bare git repository holding only
+built interfaces:
+
+- a release is a commit of one finished build;
+- a channel is a branch: =dev=, =alpha=, =beta=, =stable=, or any other
+  name (the set is open);
+- publishing adds a commit on top of a channel; promoting moves a
+  channel to any release, forwards or backwards (every move stays in
+  the reflog, so it can be undone);
+- a device follows exactly one channel.
+
 * How an update flows
 
-1. =vite build= (with the plugin) copies the build into the publish
-   directory as a frozen =<build-id>/= release and switches
-   =current.json= to it, by renames.
-2. =kal-iroh-shell-releases= notices the switch and appends an event
-   ={build_id, previous, changed, removed}= to its control stream.
+1. =kal-iroh-shell-releases publish --channel dev dist= commits the
+   build on top of =dev= (or =promote= moves a channel).
+2. =kal-iroh-shell-releases serve= sees the ref move and appends an
+   event ={channel, commit, build_id, previous, changed, removed}= to
+   its control stream.
 3. A reverse proxy (for example a vigil-watch serve mount reached over
    Iroh) carries the stream to the devices.
-4. The shell sees a release the page does not run and asks the page to
-   prepare: =window.__kalIrohShell.prepareReload(n)=.
+4. A shell following that channel sees a release the page does not run
+   and asks the page to prepare: =window.__kalIrohShell.prepareReload(n)=.
 5. The page saves what is not saved yet and answers =ready=, or =busy=
    with a reason while the user is recording, uploading or sending; it
    renews =busy= and turns =ready= as soon as it can.
@@ -43,12 +56,20 @@ Three parts:
 ** Server
 
 #+begin_src sh
-kal-iroh-shell-releases --dir ~/.local/share/my-app-releases -v
+S=~/.local/share/my-app-releases.git
+kal-iroh-shell-releases --store $S publish --channel dev frontend/dist   # creates the store
+kal-iroh-shell-releases --store $S promote dev alpha        # alpha ← what dev has
+kal-iroh-shell-releases --store $S promote 20261030T085038-b066f8 beta   # by build id
+kal-iroh-shell-releases --store $S promote stable~1 stable  # undo the last stable move
+kal-iroh-shell-releases --store $S channels                 # where each channel points
+kal-iroh-shell-releases --store $S log beta                 # history of a channel
+kal-iroh-shell-releases --store $S serve -v
 #+end_src
 
-It listens on =127.0.0.1:4310= by default (=--listen=) and must be
+=serve= listens on =127.0.0.1:4310= by default (=--listen=) and must be
 reachable by the devices below a path prefix, for example through a
-reverse proxy at =/serve/my-app/=.
+reverse proxy at =/serve/my-app/=.  =--store= can also be given as
+=$KAL_IROH_SHELL_RELEASES_STORE=.
 
 ** Build
 
@@ -57,12 +78,12 @@ reverse proxy at =/serve/my-app/=.
 import { kalIrohShellRelease } from '@0k/kal-iroh-shell/vite';
 
 export default defineConfig({
-  plugins: [vue(), kalIrohShellRelease({ publishDir: process.env.MY_APP_PUBLISH_DIR })],
+  plugins: [vue(), kalIrohShellRelease()],
 });
 #+end_src
 
-Without =publishDir= the build only gets its =ui-manifest.json= (to be
-embedded in the app as the fallback copy).
+The plugin only writes =ui-manifest.json= into the build; publishing is
+the explicit =publish= command above.
 
 ** Page
 

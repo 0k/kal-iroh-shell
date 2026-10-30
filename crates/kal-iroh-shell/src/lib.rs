@@ -38,8 +38,9 @@ use axum::response::{IntoResponse, Response};
 use futures::future::BoxFuture;
 pub use kal_iroh_shell_protocol as protocol;
 use kal_iroh_shell_protocol::{
-    BOOT_MARK_PATH, PAGE_GLOBAL, POINTER_FILE, Pointer, RELEASE_FILES_PREFIX, RELOAD_ACK_PATH,
-    ReloadAck, STATUS_PATH, UI_BUILD_ATTR, UI_SOURCE_ATTR, valid_build_id, valid_release_path,
+    BOOT_MARK_PATH, CHANNELS_PREFIX, ChannelHead, PAGE_GLOBAL, RELEASE_FILES_PREFIX,
+    RELOAD_ACK_PATH, ReloadAck, STATUS_PATH, UI_BUILD_ATTR, UI_SOURCE_ATTR, valid_channel,
+    valid_commit, valid_release_path,
 };
 
 /// Longest wait for the admission verdict before serving the embedded
@@ -67,6 +68,8 @@ pub trait Host: Send + Sync + 'static {
     }
     /// Whether the user wants the remote interface (a device setting).
     fn remote_ui_enabled(&self) -> bool;
+    /// The release channel this device follows (`stable`, `beta`, `dev`…).
+    fn channel(&self) -> String;
     /// `Ok` once the server admitted this device, waiting at most `grace`
     /// for its verdict; `Err` explains why not.
     fn authorized(&self, grace: Duration) -> BoxFuture<'_, Result<(), String>>;
@@ -95,6 +98,10 @@ pub struct ServedUi {
     /// `"remote"` or `"embedded"`.
     pub source: &'static str,
     pub build_id: String,
+    /// The release's commit, for a remote page.
+    pub commit: Option<String>,
+    /// The channel it came from, for a remote page.
+    pub channel: Option<String>,
     /// Why the remote release was not used, for an embedded page.
     pub fallback_reason: Option<String>,
 }
@@ -133,19 +140,19 @@ pub fn prepare_script(request: u64) -> String {
 }
 
 /// Point a release's `index.html` at its files under
-/// `/__shell/ui/<build-id>/`.
+/// `/__shell/ui/<commit>/`.
 ///
 /// A release is built with relative asset URLs (`./assets/…`); one
 /// without any would silently load the EMBEDDED assets under a remote
 /// index, so it is refused.
-pub fn rewrite_release_index(html: &str, build_id: &str) -> Result<String, String> {
+pub fn rewrite_release_index(html: &str, commit: &str) -> Result<String, String> {
     const RELATIVE: &str = "\"./assets/";
     if !html.contains(RELATIVE) {
         return Err("index.html has no relative ./assets/ reference".to_string());
     }
     Ok(html.replace(
         RELATIVE,
-        &format!("\"{RELEASE_FILES_PREFIX}/{build_id}/assets/"),
+        &format!("\"{RELEASE_FILES_PREFIX}/{commit}/assets/"),
     ))
 }
 
@@ -157,6 +164,8 @@ pub struct RemoteUi {
     boot_marks: Mutex<Vec<serde_json::Value>>,
     shell_tx: Option<tokio::sync::mpsc::UnboundedSender<ShellCommand>>,
     handshake: Mutex<reload::Handshake>,
+    /// Channel names last seen on the server's control stream.
+    known_channels: Mutex<Vec<String>>,
 }
 
 impl RemoteUi {
@@ -174,6 +183,7 @@ impl RemoteUi {
             boot_marks: Mutex::new(Vec::new()),
             shell_tx,
             handshake: Mutex::new(reload::Handshake::default()),
+            known_channels: Mutex::new(Vec::new()),
         })
     }
 
@@ -182,11 +192,13 @@ impl RemoteUi {
     /// [`ServedUi::root_attributes`] into the root element.
     pub async fn index(&self, embedded: EmbeddedIndex) -> (String, ServedUi) {
         let (html, served) = match self.fetch_remote_index().await {
-            Ok((html, build_id)) => (
+            Ok((html, head)) => (
                 html,
                 ServedUi {
                     source: "remote",
-                    build_id,
+                    build_id: head.build_id,
+                    commit: Some(head.commit),
+                    channel: Some(head.channel),
                     fallback_reason: None,
                 },
             ),
@@ -197,6 +209,8 @@ impl RemoteUi {
                     ServedUi {
                         source: "embedded",
                         build_id: embedded.build_id,
+                        commit: None,
+                        channel: None,
                         fallback_reason: Some(reason),
                     },
                 )
@@ -215,7 +229,7 @@ impl RemoteUi {
             .route(STATUS_PATH, get(status_handler))
             .route(BOOT_MARK_PATH, get(get_boot_marks).post(post_boot_mark))
             .route(
-                &format!("{RELEASE_FILES_PREFIX}/{{build_id}}/{{*path}}"),
+                &format!("{RELEASE_FILES_PREFIX}/{{commit}}/{{*path}}"),
                 get(release_file_handler),
             )
             .route(RELOAD_ACK_PATH, post(ack_handler))
@@ -273,13 +287,17 @@ impl RemoteUi {
         }
     }
 
-    /// Release `build_id` is current: start the handshake when the page
-    /// does not run it.  A page that fell back to the embedded interface
-    /// is reloaded too, so it gets the remote release once reachable.
-    fn consider_release(&self, build_id: &str) {
+    /// Channel `channel` points to release `commit`: start the handshake
+    /// when it is this device's channel and the page does not run that
+    /// release.  A page that fell back to the embedded interface is
+    /// reloaded too, so it gets the remote release once reachable.
+    fn consider_release(&self, channel: &str, commit: &str) {
+        if channel != self.host.channel() {
+            return;
+        }
         let served = self.served.lock().ok().and_then(|g| g.clone());
         let stale = match &served {
-            Some(s) if s.source == "remote" => s.build_id != build_id,
+            Some(s) if s.source == "remote" => s.commit.as_deref() != Some(commit),
             Some(_) => true,
             None => false,
         };
@@ -311,35 +329,53 @@ impl RemoteUi {
         Ok(resp)
     }
 
-    async fn fetch_pointer(&self) -> Result<Pointer, String> {
-        let pointer: Pointer = self
-            .server_get(&format!("/{POINTER_FILE}"))
+    /// Where this device's channel points on the server.
+    async fn fetch_head(&self) -> Result<ChannelHead, String> {
+        let channel = self.host.channel();
+        if !valid_channel(&channel) {
+            return Err(format!("invalid channel setting {channel:?}"));
+        }
+        let head: ChannelHead = self
+            .server_get(&format!("{CHANNELS_PREFIX}/{channel}"))
             .await?
             .json()
             .await
-            .map_err(|e| format!("{POINTER_FILE}: {e}"))?;
-        if !valid_build_id(&pointer.build_id) {
+            .map_err(|e| format!("channel {channel}: {e}"))?;
+        if !valid_commit(&head.commit) {
             return Err(format!(
-                "{POINTER_FILE}: invalid build id {:?}",
-                pointer.build_id
+                "channel {channel}: invalid commit {:?}",
+                head.commit
             ));
         }
-        Ok(pointer)
+        Ok(head)
     }
 
-    async fn fetch_remote_index(&self) -> Result<(String, String), String> {
+    /// Re-check this device's channel now, e.g. after the user changed
+    /// the channel or turned the remote interface on: reload the page if
+    /// it does not run what the channel points to.
+    pub async fn recheck(&self) {
+        if !self.host.remote_ui_enabled() {
+            return;
+        }
+        match self.fetch_head().await {
+            Ok(head) => self.consider_release(&head.channel, &head.commit),
+            Err(e) => log::info!("kal-iroh-shell: recheck: {e}"),
+        }
+    }
+
+    async fn fetch_remote_index(&self) -> Result<(String, ChannelHead), String> {
         if !self.host.remote_ui_enabled() {
             return Err("remote interface setting is off".to_string());
         }
         self.host.authorized(REMOTE_BOOT_BUDGET).await?;
-        let id = self.fetch_pointer().await?.build_id;
+        let head = self.fetch_head().await?;
         let html = self
-            .server_get(&format!("/{id}/index.html"))
+            .server_get(&format!("/{}/index.html", head.commit))
             .await?
             .text()
             .await
             .map_err(|e| format!("index.html: {e}"))?;
-        Ok((rewrite_release_index(&html, &id)?, id))
+        Ok((rewrite_release_index(&html, &head.commit)?, head))
     }
 }
 
@@ -348,15 +384,15 @@ type Shared = State<Arc<RemoteUi>>;
 /// `GET /__shell/ui/{build_id}/{*path}` — one file of a published release.
 async fn release_file_handler(
     State(ui): Shared,
-    Path((build_id, path)): Path<(String, String)>,
+    Path((commit, path)): Path<(String, String)>,
 ) -> Response {
-    if !valid_build_id(&build_id) || !valid_release_path(&path) {
+    if !valid_commit(&commit) || !valid_release_path(&path) {
         return (StatusCode::BAD_REQUEST, "invalid release path").into_response();
     }
     if let Err(reason) = ui.host.authorized(ui.config.admission_grace).await {
         return (StatusCode::SERVICE_UNAVAILABLE, reason).into_response();
     }
-    let resp = match ui.server_get(&format!("/{build_id}/{path}")).await {
+    let resp = match ui.server_get(&format!("/{commit}/{path}")).await {
         Ok(r) => r,
         Err(reason) => {
             log::warn!("kal-iroh-shell: {reason}");
@@ -388,13 +424,19 @@ async fn release_file_handler(
     (StatusCode::OK, headers, body).into_response()
 }
 
-/// `GET /__shell/status` — setting, served interface, current release,
-/// reload state.  The server is asked only when the setting is on.
+/// `GET /__shell/status` — setting, channel, served interface, where the
+/// channel points, known channels, reload state.  The server is asked
+/// only when the setting is on.
 async fn status_handler(State(ui): Shared) -> Response {
     let enabled = ui.host.remote_ui_enabled();
     let served = ui.served.lock().ok().and_then(|g| g.clone());
+    let channels = ui
+        .known_channels
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_default();
     let (current, current_error) = if enabled {
-        match ui.fetch_pointer().await {
+        match ui.fetch_head().await {
             Ok(p) => (Some(p), None),
             Err(e) => (None, Some(e)),
         }
@@ -408,6 +450,8 @@ async fn status_handler(State(ui): Shared) -> Response {
         .map(|h| serde_json::json!({"pending": h.pending(), "busy_reason": h.busy_reason()}));
     axum::Json(serde_json::json!({
         "enabled": enabled,
+        "channel": ui.host.channel(),
+        "channels": channels,
         "served": served,
         "reload": reload,
         "current": current,
