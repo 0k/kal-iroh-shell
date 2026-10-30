@@ -25,6 +25,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -106,6 +107,31 @@ pub struct ReleaseServer {
     dir: Arc<PathBuf>,
     current: Arc<Mutex<Option<Pointer>>>,
     log: Arc<Mutex<EventLog<ReleaseEvent>>>,
+    /// Refreshes triggered by the directory watch (diagnostics, tests).
+    watch_refreshes: Arc<AtomicU64>,
+}
+
+/// Whether `event` is a write to the pointer file: a publish.
+///
+/// Only writes count — the publisher's rename onto `current.json`, its
+/// creation, a direct write.  Opens, reads and metadata changes do NOT:
+/// [`ReleaseServer::refresh`] itself opens `current.json`, so reacting
+/// to opens re-triggers the refresh forever (one core spinning after the
+/// first publish).
+pub fn is_publish_event(event: &notify::Event) -> bool {
+    use notify::EventKind;
+    use notify::event::{AccessKind, AccessMode, ModifyKind};
+    let writes = matches!(
+        event.kind,
+        EventKind::Create(_)
+            | EventKind::Modify(ModifyKind::Data(_) | ModifyKind::Name(_) | ModifyKind::Any)
+            | EventKind::Access(AccessKind::Close(AccessMode::Write))
+    );
+    writes
+        && event
+            .paths
+            .iter()
+            .any(|p| p.file_name().is_some_and(|n| n == POINTER_FILE))
 }
 
 impl ReleaseServer {
@@ -115,7 +141,13 @@ impl ReleaseServer {
             dir: Arc::new(dir),
             current: Arc::new(Mutex::new(current)),
             log: Arc::new(Mutex::new(EventLog::new(SUB_TTL, MAX_EVENTS, 64))),
+            watch_refreshes: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// How many refreshes the directory watch has triggered.
+    pub fn watch_refreshes(&self) -> u64 {
+        self.watch_refreshes.load(Ordering::Relaxed)
     }
 
     /// Re-read `current.json`; append an event when the release changed.
@@ -146,12 +178,8 @@ impl ReleaseServer {
         let server = self.clone();
         let mut watcher =
             notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
-                Ok(event)
-                    if event
-                        .paths
-                        .iter()
-                        .any(|p| p.file_name().is_some_and(|n| n == POINTER_FILE)) =>
-                {
+                Ok(event) if is_publish_event(&event) => {
+                    server.watch_refreshes.fetch_add(1, Ordering::Relaxed);
                     server.refresh();
                 }
                 Ok(_) => {}
@@ -341,6 +369,74 @@ mod tests {
             None,
             "an unchanged pointer announces nothing"
         );
+    }
+
+    #[tokio::test]
+    async fn one_publish_triggers_a_bounded_number_of_refreshes() {
+        // Regression: the watch reacted to ANY event on `current.json`,
+        // including the open done by `refresh()` itself, so one publish
+        // started an endless open → refresh → open loop (one core, forever).
+        let dir = tempfile::tempdir().unwrap();
+        write_release(dir.path(), "r1", &[("index.html", "a")]);
+        write_release(dir.path(), "r2", &[("index.html", "b")]);
+        make_current(dir.path(), "r1");
+        let server = ReleaseServer::new(dir.path().to_path_buf());
+        let _watcher = server.watch().unwrap();
+
+        make_current(dir.path(), "r2");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let after_publish = server.watch_refreshes();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        assert_eq!(
+            server.current.lock().unwrap().as_ref().unwrap().build_id,
+            "r2"
+        );
+        assert!(
+            (1..=3).contains(&after_publish),
+            "{after_publish} refreshes for one publish"
+        );
+        assert_eq!(
+            server.watch_refreshes(),
+            after_publish,
+            "the watch must go quiet"
+        );
+    }
+
+    #[test]
+    fn only_writes_to_the_pointer_are_publish_events() {
+        use notify::event::{
+            AccessKind, AccessMode, CreateKind, DataChange, MetadataKind, ModifyKind, RenameMode,
+        };
+        use notify::{Event, EventKind};
+        let on = |kind, name: &str| Event::new(kind).add_path(PathBuf::from("/pub").join(name));
+
+        for kind in [
+            EventKind::Modify(ModifyKind::Name(RenameMode::To)),
+            EventKind::Create(CreateKind::File),
+            EventKind::Modify(ModifyKind::Data(DataChange::Any)),
+            EventKind::Access(AccessKind::Close(AccessMode::Write)),
+        ] {
+            assert!(
+                is_publish_event(&on(kind, POINTER_FILE)),
+                "{kind:?} must count"
+            );
+        }
+        for kind in [
+            EventKind::Access(AccessKind::Open(AccessMode::Any)),
+            EventKind::Access(AccessKind::Read),
+            EventKind::Access(AccessKind::Close(AccessMode::Read)),
+            EventKind::Modify(ModifyKind::Metadata(MetadataKind::Any)),
+        ] {
+            assert!(
+                !is_publish_event(&on(kind, POINTER_FILE)),
+                "{kind:?} must be ignored"
+            );
+        }
+        assert!(!is_publish_event(&on(
+            EventKind::Modify(ModifyKind::Name(RenameMode::To)),
+            "other.json"
+        )));
     }
 
     #[tokio::test]
